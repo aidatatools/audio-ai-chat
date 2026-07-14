@@ -34,7 +34,7 @@ python duck_voice_chat.py
 ## Mini Pupper 2
 
 - OS: Ubuntu 24.04.4
-- Board: Raspberry Pi 4B (MangDang Mini Pupper 2)
+- Board: Raspberry Pi 4B 2GB RAM
 
 [pupper_voice_chat.py](mini-pupper-2/pupper_voice_chat.py) streams audio both ways over the OpenAI **Realtime API** (`gpt-realtime-2`) instead of a discrete STT/chat/TTS pipeline, giving lower latency and barge-in (the robot stops talking as soon as it detects you speaking). Server-side semantic VAD decides turn boundaries, and replies come back in whatever language the user spoke.
 
