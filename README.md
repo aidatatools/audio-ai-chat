@@ -36,7 +36,7 @@ python duck_voice_chat.py
 - OS: Ubuntu 24.04.4
 - Board: Raspberry Pi 4B 2GB RAM
 
-[pupper2_voice_chat.py](mini-pupper-2/pupper2_voice_chat.py) streams audio both ways over the OpenAI **Realtime API** (`gpt-realtime-2`) instead of a discrete STT/chat/TTS pipeline, giving lower latency. Server-side semantic VAD decides turn boundaries, and replies come back in whatever language the user spoke.
+[pupper2_voice_chat_v2.py](mini-pupper-2/pupper2_voice_chat_v2.py) streams audio both ways over the OpenAI **Realtime API** (`gpt-realtime-2.1`) instead of a discrete STT/chat/TTS pipeline, giving lower latency. Server-side semantic VAD decides turn boundaries, and replies come back in whatever language the user spoke. You can interrupt Pupper mid-reply (local barge-in). Full setup, configuration and tuning are in [mini-pupper-2/README.md](mini-pupper-2/README.md).
 
 Hardware quirks the script works around:
 
@@ -44,28 +44,43 @@ Hardware quirks the script works around:
 - Speaker is the bcm2835 PWM output on ALSA card 0 (playback-only, volume controlled via the `PCM` mixer, not `Headphone`)
 - `~/.asoundrc` should map default playback -> `plughw:0,0` and capture -> `plughw:1,0`
 
-### Use `pupper2_voice_chat.py`, not `pupper_voice_chat.py`
+### Use `pupper2_voice_chat_v2.py`
 
-The original script ([pupper_voice_chat.py](mini-pupper-2/pupper_voice_chat.py)) is left in the repo for reference, but it stutters and feeds back on real hardware. `pupper2_voice_chat.py` fixes both, plus resilience over long sessions:
+The two earlier scripts are left in the repo for reference only:
+
+- [pupper_voice_chat.py](mini-pupper-2/pupper_voice_chat.py): the original. It stutters and feeds back on real hardware.
+- [pupper2_voice_chat.py](mini-pupper-2/pupper2_voice_chat.py): fixes the stutter and feedback, but mutes the mic while Pupper talks, so you can't interrupt it.
+
+`pupper2_voice_chat_v2.py` keeps all of `pupper2_voice_chat.py`'s fixes and adds:
+
+- **Local barge-in without AEC:** while Pupper talks, mic audio isn't sent to the API but is still measured locally. The script learns how loud the speaker echo normally is at the mic. When your voice is clearly louder than that echo, it stops playback, cancels the response, truncates the reply to what you actually heard, and sends ~300 ms of pre-roll so your first words aren't lost.
+- **Device-rate probing and resampling:** the script works when the hardware doesn't support 24 kHz directly, for example by running the device at 48 kHz and resampling.
+- **Echo hangover:** the mic stays muted for 0.6 s after playback ends, so the echo tail isn't sent to the API.
+- **Short-reply playback fix:** short replies no longer get stuck in the jitter buffer.
+- **Clean Ctrl+C.**
+
+What `pupper2_voice_chat.py` fixed over the original, all still in v2:
 
 - **Playback jitter buffer** — audio doesn't start playing until ~300 ms (`PREBUFFER_BLOCKS`) has queued up. The old script started playing the instant any audio arrived, so a normal network burst would starve the speaker callback mid-word, causing the stutter.
 - **Thread-safe leftover handling** — the old speaker callback pushed unplayed remainder samples back with `spk_q.queue.appendleft(...)`, mutating the queue's internal deque directly from the audio callback thread while the main thread was also reading it. That's a data race. The new version tracks the remainder in a plain `_leftover` array owned solely by the callback thread.
-- **Half-duplex echo suppression** — on this board the speaker sits inches from the mics, so anything Pupper says gets picked back up and sent to the API as if the user said it, making Pupper interrupt itself. The new script mutes the mic (via a `speaking` event) for the duration of playback. Set `FULL_DUPLEX=1` to restore barge-in if you add real AEC or run over headphones.
+- **Half-duplex echo suppression** — on this board the speaker sits inches from the mics, so anything Pupper says gets picked back up and sent to the API as if the user said it, making Pupper interrupt itself. The new script mutes the mic (via a `speaking` event) for the duration of playback. v2 keeps this gating but adds local barge-in on top.
 - **100 ms audio blocks** (`BLOCK = 2400` vs. the old 50 ms) — larger blocks give the Pi 4B's ARM cores more slack per callback, which matters once you're also running the prebuffer/echo-gating logic.
 - **Auto-reconnect** — Realtime API sessions are capped at 60 minutes; the old script just crashed when the socket closed. The new one reconnects with exponential backoff and clears the speaker buffer on disconnect so stale audio doesn't play after a reconnect.
 
-Env vars: `OPENAI_API_KEY` (required), `MIC_GAIN` (software mic boost, default `20`), `PUPPER_VOICE` (Realtime API voice, default `marin`), `FULL_DUPLEX` (set `1` to allow barge-in, default off).
+Main env vars: `OPENAI_API_KEY` (required), `MIC_GAIN` (software mic boost, default `20`), `PUPPER_VOICE` (Realtime API voice, default `marin`), `SPK_VOLUME` (speaker %, default `80`), `BARGE_IN` (`0` disables interrupting). `BARGE_RATIO`, `BARGE_MIN_RMS`, `BARGE_BLOCKS` and `BARGE_DEBUG` tune barge-in. `FULL_DUPLEX=1` turns off mic gating entirely (headphones or AEC only). See the [full table](mini-pupper-2/README.md#configuration-environment-variables).
 
 ### How to run
 
 ```bash
-# Install deps in your venv:
-pip install openai sounddevice websockets numpy
-sudo apt install -y libportaudio2
+sudo apt install -y python3-venv libportaudio2 alsa-utils
+cd mini-pupper-2
+python3 -m venv .venv && source .venv/bin/activate
+pip install numpy sounddevice "websockets>=14"
 export OPENAI_API_KEY=sk-...
-# Run it with:
-python pupper2_voice_chat.py
+python pupper2_voice_chat_v2.py
 ```
+
+Step-by-step setup (including `~/.asoundrc`) and troubleshooting are in [mini-pupper-2/README.md](mini-pupper-2/README.md#how-to-run).
 
 ## Reference
 
